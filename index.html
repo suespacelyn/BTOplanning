@@ -558,7 +558,7 @@ label.tog{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13px
     </aside>
     <aside id="shortPanel" hidden aria-labelledby="spTitle">
       <header class="ph">
-        <div class="tt"><p class="eyebrow">Saved in this browser</p><h1 id="spTitle">Watchlist</h1></div>
+        <div class="tt"><p class="eyebrow" id="spEyebrow">Saved in this browser</p><h1 id="spTitle">Watchlist</h1></div>
         <button id="spClose" class="iconbtn" type="button" aria-label="Close watchlist" title="Close watchlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </header>
       <div id="spBody">
@@ -642,9 +642,20 @@ const P2M=p=>[(p[0]-D.W/2)/D.ppm,(p[1]-D.H/2)/D.ppm];
 let proj='all', filter='4R', selected=null, hovered=null, unitView=false, month='dec';
 let watch=[];
 // your saved picks (21 Nov 2026): shown on any device or browser that hasn't saved its own watchlist yet
-const SAVED_WATCH=[{s:188,f:27},{s:188,f:24},{s:188,f:26},{s:182,f:28},{s:190,f:28},{s:190,f:26},{s:435,f:18},{s:182,f:26}];
-try{ const raw=localStorage.getItem('portico-watchlist-v1'); watch=raw===null?SAVED_WATCH.slice():JSON.parse(raw).filter(w=>w&&w.s&&w.f) }catch(e){ watch=SAVED_WATCH.slice() }
-const saveWatch=()=>{ try{ localStorage.setItem('portico-watchlist-v1',JSON.stringify(watch)) }catch(e){} };
+const SAVED_WATCH=[{s:188,f:27},{s:188,f:24},{s:188,f:26},{s:182,f:28},{s:190,f:28},{s:190,f:26},{s:435,f:18},{s:182,f:26},{s:439,f:21},{s:439,f:18},{s:429,f:25},{s:435,f:25},{s:435,f:21},{s:433,f:21},{s:433,f:25}];
+try{ const raw=localStorage.getItem('portico-watchlist-v2'); watch=raw===null?SAVED_WATCH.slice():JSON.parse(raw).filter(w=>w&&w.s&&w.f) }catch(e){ watch=SAVED_WATCH.slice() }
+// Shared watchlist: one db document everyone on the artifact reads; local copy is the fallback
+let wDoc=null, wSyncing=false, wPending=null, wReadOnly=false;
+const saveWatchLocal=()=>{ try{ localStorage.setItem('portico-watchlist-v2',JSON.stringify(watch)) }catch(e){} };
+const saveWatch=()=>{ saveWatchLocal(); pushWatch(); };
+function setSyncNote(state){ const el=document.getElementById('spEyebrow'); if(!el) return;
+  el.textContent={ok:'Shared · updates live',ro:'Shared · view only',loading:'Shared · connecting…',slow:'Shared · can’t reach sync yet',err:'Saved in this browser'}[state]||'Saved in this browser'; }
+function pushWatch(){ if(!wDoc||wReadOnly) return; wPending=watch.map(w=>({s:w.s,f:w.f})); if(!wSyncing) flushWatch(); }
+async function flushWatch(){ wSyncing=true;
+  while(wPending){ const items=wPending; wPending=null;
+    try{ await wDoc.set({items,updatedAt:Date.now()}); setSyncNote('ok'); }
+    catch(e){ if(e&&e.code==='invalid_argument'){ wReadOnly=true; setSyncNote('ro'); } else setSyncNote('err'); break; } }
+  wSyncing=false; }
 
 // ---------- three setup ----------
 const stage=document.getElementById('stage');
@@ -2184,6 +2195,21 @@ controls.addEventListener('change',markDirty);
 let _shT=null; controls.addEventListener('change',()=>{ clearTimeout(_shT); _shT=setTimeout(frameShadow,220); });
 document.getElementById('slAdd').onclick=()=>{ SHORTLISTS[slProj].forEach(x=>{ const f=+x.k.slice(0,2), s=+x.k.slice(3); if(slHidden[x.k]) return; if(!isTaken(s,f)&&inWatch(s,f)<0) watch.push({s,f}); }); saveWatch(); refreshAll(); };
 refreshAll(); requestAnimationFrame(tick);
+// connect the shared watchlist when this view has the db capability (claude.ai artifact); otherwise stay local
+(async()=>{ try{
+  if(!window.claude||typeof window.claude.use!=='function') return;
+  const db=await window.claude.use('db'); if(!db) return;
+  wDoc=db.doc('shared/watchlist'); setSyncNote('loading');
+  const slow=setTimeout(()=>setSyncNote('slow'),10000);
+  wDoc.onSnapshot(snap=>{
+    if(!snap.metadata.fromCache) clearTimeout(slow);
+    if(!snap.exists){ if(!snap.metadata.fromCache) setSyncNote(wReadOnly?'ro':'ok'); return; }
+    const d=snap.data()||{};
+    const items=(Array.isArray(d.items)?d.items:[]).filter(w=>w&&Number.isInteger(w.s)&&Number.isInteger(w.f)&&stacks[w.s]).map(w=>({s:w.s,f:w.f}));
+    if(JSON.stringify(items)!==JSON.stringify(watch.map(w=>({s:w.s,f:w.f})))){ watch=items; saveWatchLocal(); refreshAll(); }
+    if(!snap.metadata.fromCache) setSyncNote(wReadOnly?'ro':'ok');
+  },()=>{ clearTimeout(slow); wDoc=null; setSyncNote('err'); });
+}catch(e){ setSyncNote('err'); } })();
 window.__portico={select,stacks,poiTextures,POI_STYLE};
 })();
 </script>
